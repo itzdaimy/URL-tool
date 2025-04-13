@@ -14,7 +14,7 @@ A super simple URL tool
 
 ## **💻 Build into exe**
 
-1. Put both the client.cs and server.cs into 1 folder
+1. Put the program.cs in to a folder
 2. Open up cmd in the folder.
 3. type "dotnet new console -n urltool"
 4. then put your cmd in each folders it created and run "dotnet publish -c Release -r win-x64 --self-contained" OR you can use "dotnet publish -c Release -r win-x64 --self-contained false" (user must have .net installed)
