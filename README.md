@@ -2,13 +2,13 @@
 
 A super simple URL tool
 ---
-## **🚀 Features**
+## 🚀 Features  
 
-- **💻 Scraper**: Copy frontend files.
-- **🖼️ Monitoring**: Monitor if a website is online or not.
-- **📜 Site analyzing**: Analyze the site**.
-- **🔄 Response time**: track sites response time.
-- **🖼️ Embed Copier**: Copy embeds (to use in discord for example).
+- 📂 Scraper: Copy frontend files.  
+- 👁️ Monitoring: Monitor if a website is online or not.  
+- 🔍 Site Analyzing: Analyze the site.  
+- ⏱️ Response Time: Track site response time.  
+- 📎 Embed Copier: Copy embeds (to use in Discord, for example).  
 
 ---
 
