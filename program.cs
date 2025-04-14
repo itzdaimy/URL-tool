@@ -1,4 +1,4 @@
-// MADE BY DAIMY
+// daimyh on dc for support/help
 
 using System;
 using System.IO;
@@ -11,6 +11,8 @@ using System.Net;
 using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.Text;
+using System.Security.Cryptography;
+using System.Threading;
 
 public class URLTool
 {
@@ -22,35 +24,47 @@ public class URLTool
         Timeout = TimeSpan.FromMinutes(2)
     };
 
+    private static ConsoleColor primaryColor = ConsoleColor.Cyan;
+    private static ConsoleColor secondaryColor = ConsoleColor.Yellow;
+    private static ConsoleColor successColor = ConsoleColor.Green;
+    private static ConsoleColor errorColor = ConsoleColor.Red;
+    private static ConsoleColor highlightColor = ConsoleColor.Magenta;
+
     #region Website Scraping
     
     public static async Task ScrapeWebsiteAsync(string url)
     {
         try
         {
+            PrintHeader("Website Scraper");
+            
             var uri = new Uri(url);
             var siteName = uri.Host.Replace(".", "_"); 
             string outputDirectory = Path.Combine(Directory.GetCurrentDirectory(), siteName);
 
             Directory.CreateDirectory(outputDirectory);
 
-            Console.WriteLine($"\nStarting to scrape: {url}");
-            Console.WriteLine($"Saving to folder: {outputDirectory}");
+            PrintColoredLine($"Starting to scrape: {url}", primaryColor);
+            PrintColoredLine($"Saving to folder: {outputDirectory}", secondaryColor);
             
+            client.DefaultRequestHeaders.Clear();
             client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            
+            PrintProgress("Downloading HTML content", 0);
             var response = await client.GetAsync(url);
             response.EnsureSuccessStatusCode();
             var html = await response.Content.ReadAsStringAsync();
+            PrintProgress("Downloading HTML content", 100);
             
             if (string.IsNullOrEmpty(html))
             {
-                Console.WriteLine("No HTML content found on the page.");
+                PrintColoredLine("No HTML content found on the page.", errorColor);
                 return;
             }
 
             var htmlPath = Path.Combine(outputDirectory, "index.html");
             File.WriteAllText(htmlPath, html);
-            Console.WriteLine($"HTML saved to {htmlPath}");
+            PrintColoredLine($"HTML saved to {htmlPath}", successColor);
             
             var doc = new HtmlDocument();
             doc.LoadHtml(html);
@@ -61,41 +75,53 @@ public class URLTool
                 .Where(url => !string.IsNullOrWhiteSpace(url))
                 .Distinct()
                 .ToList();
-                
-            foreach (var cssFile in cssFiles)
+            
+            PrintColoredLine($"\nFound {cssFiles.Count} CSS files to download", secondaryColor);
+            for (int i = 0; i < cssFiles.Count; i++)
             {
-                await DownloadAssetWithPathPreservationAsync(url, cssFile, outputDirectory);
+                PrintProgress($"Downloading CSS files", (i * 100) / cssFiles.Count);
+                await DownloadAssetWithPathPreservationAsync(url, cssFiles[i], outputDirectory);
             }
+            if (cssFiles.Count > 0) PrintProgress($"Downloading CSS files", 100);
             
             var jsFiles = doc.DocumentNode.Descendants("script")
                 .Select(n => n.GetAttributeValue("src", ""))
                 .Where(url => !string.IsNullOrWhiteSpace(url))
                 .Distinct()
                 .ToList();
-                
-            foreach (var jsFile in jsFiles)
+            
+            PrintColoredLine($"\nFound {jsFiles.Count} JavaScript files to download", secondaryColor);
+            for (int i = 0; i < jsFiles.Count; i++)
             {
-                await DownloadAssetWithPathPreservationAsync(url, jsFile, outputDirectory);
+                PrintProgress($"Downloading JavaScript files", (i * 100) / jsFiles.Count);
+                await DownloadAssetWithPathPreservationAsync(url, jsFiles[i], outputDirectory);
             }
+            if (jsFiles.Count > 0) PrintProgress($"Downloading JavaScript files", 100);
             
             var imageFiles = doc.DocumentNode.Descendants("img")
                 .Select(n => n.GetAttributeValue("src", ""))
                 .Where(url => !string.IsNullOrWhiteSpace(url))
                 .Distinct()
                 .ToList();
-                
-            foreach (var imageFile in imageFiles)
+            
+            PrintColoredLine($"\nFound {imageFiles.Count} image files to download", secondaryColor);
+            for (int i = 0; i < imageFiles.Count; i++)
             {
-                await DownloadAssetWithPathPreservationAsync(url, imageFile, outputDirectory);
+                PrintProgress($"Downloading image files", (i * 100) / imageFiles.Count);
+                await DownloadAssetWithPathPreservationAsync(url, imageFiles[i], outputDirectory);
             }
+            if (imageFiles.Count > 0) PrintProgress($"Downloading image files", 100);
 
-            Console.WriteLine("\nWebsite scraping complete!");
-            Console.WriteLine($"All assets saved to: {outputDirectory}");
+            PrintColoredLine("\nWebsite scraping complete!", successColor);
+            PrintColoredLine($"All assets saved to: {outputDirectory}", successColor);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error during scraping: {ex.Message}");
-            Console.WriteLine($"Stack Trace: {ex.StackTrace}");
+            PrintColoredLine($"Error during scraping: {ex.Message}", errorColor);
+            if (ex.InnerException != null)
+            {
+                PrintColoredLine($"Inner Exception: {ex.InnerException.Message}", errorColor);
+            }
         }
     }
 
@@ -154,21 +180,21 @@ public class URLTool
                 {
                     var assetData = await client.GetByteArrayAsync(assetUri);
                     await File.WriteAllBytesAsync(assetPath, assetData);
-                    Console.WriteLine($"Downloaded: {relativePath}");
+                    Console.WriteLine($"  Downloaded: {relativePath}");
                 }
                 catch (HttpRequestException httpEx)
                 {
-                    Console.WriteLine($"HTTP error downloading {assetUri.AbsoluteUri}: {httpEx.Message}");
+                    PrintColoredLine($"  HTTP error downloading {assetUri.AbsoluteUri}: {httpEx.Message}", errorColor);
                 }
             }
             else
             {
-                Console.WriteLine($"Skipping non-HTTP asset: {assetUri.AbsoluteUri}");
+                PrintColoredLine($"  Skipping non-HTTP asset: {assetUri.AbsoluteUri}", errorColor);
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error downloading asset {assetUrl}: {ex.Message}");
+            PrintColoredLine($"  Error downloading asset {assetUrl}: {ex.Message}", errorColor);
         }
     }
 
@@ -219,29 +245,40 @@ public class URLTool
     
     public static async Task MonitorURLAsync(string url, int checkIntervalMinutes)
     {
-        Console.WriteLine($"\nStarting website monitoring for: {url}");
-        Console.WriteLine($"Check interval: Every {checkIntervalMinutes} minute(s)");
-        Console.WriteLine("Press Ctrl+C to stop monitoring\n");
+        PrintHeader("Website Monitoring");
+        
+        PrintColoredLine($"Starting website monitoring for: {url}", primaryColor);
+        PrintColoredLine($"Check interval: Every {checkIntervalMinutes} minute(s)", secondaryColor);
+        PrintColoredLine("Press Ctrl+C to stop monitoring\n", highlightColor);
         
         var previousStatus = false;
         var statusChangedTime = DateTime.Now;
+        
+        DrawBox("Monitoring Status", 60);
         
         while (true)
         {
             var status = await CheckWebsiteStatusAsync(url);
             var statusText = status ? "UP" : "DOWN";
             
+            Console.SetCursorPosition(0, Console.CursorTop);
+            Console.Write(new string(' ', Console.BufferWidth - 1));
+            Console.SetCursorPosition(0, Console.CursorTop);
+            
             if (status != previousStatus)
             {
                 statusChangedTime = DateTime.Now;
-                Console.ForegroundColor = status ? ConsoleColor.Green : ConsoleColor.Red;
+                Console.ForegroundColor = status ? successColor : errorColor;
                 Console.WriteLine($"[{DateTime.Now}] STATUS CHANGED: Website is now {statusText}");
                 Console.ResetColor();
             }
             else
             {
                 var uptime = DateTime.Now - statusChangedTime;
-                Console.WriteLine($"[{DateTime.Now}] Website is {statusText} (Duration: {FormatTimeSpan(uptime)})");
+                Console.ForegroundColor = status ? successColor : errorColor;
+                Console.Write($"[{DateTime.Now}] Website is {statusText} ");
+                Console.ResetColor();
+                Console.WriteLine($"(Duration: {FormatTimeSpan(uptime)})");
             }
             
             previousStatus = status;
@@ -272,7 +309,7 @@ public class URLTool
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error checking URL {url}: {ex.Message}");
+            PrintColoredLine($"Error checking URL {url}: {ex.Message}", errorColor);
             return false;
         }
     }
@@ -285,10 +322,17 @@ public class URLTool
     {
         try
         {
-            Console.WriteLine("\nAnalyzing webpage content...");
-
+            PrintHeader("Content Analysis");
+            
+            PrintColoredLine("Analyzing webpage content...", primaryColor);
+            PrintProgress("Downloading webpage", 0);
+            
+            client.DefaultRequestHeaders.Clear();
             client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             var html = await client.GetStringAsync(url);
+            PrintProgress("Downloading webpage", 100);
+            
+            PrintProgress("Analyzing content", 0);
             var doc = new HtmlDocument();
             doc.LoadHtml(html);
 
@@ -303,15 +347,34 @@ public class URLTool
             var h1Count = doc.DocumentNode.Descendants("h1").Count();
             var h2Count = doc.DocumentNode.Descendants("h2").Count();
             var h3Count = doc.DocumentNode.Descendants("h3").Count();
-
-            Console.WriteLine("\n==== Content Analysis ====");
-            Console.WriteLine($"Title: {title}");
-            Console.WriteLine($"Description: {metaDescription}");
-            Console.WriteLine($"Images: {images.Count}");
-            Console.WriteLine($"Links: {links.Count}");
-            Console.WriteLine($"Scripts: {scripts.Count}");
-            Console.WriteLine($"Stylesheets: {styles.Count}");
-            Console.WriteLine($"Headers: {h1Count} H1, {h2Count} H2, {h3Count} H3");
+            var formCount = doc.DocumentNode.Descendants("form").Count();
+            var buttonCount = doc.DocumentNode.Descendants("button").Count();
+            var inputCount = doc.DocumentNode.Descendants("input").Count();
+            
+            PrintProgress("Analyzing content", 100);
+            
+            DrawBox("Content Analysis Results", 60);
+            
+            Console.WriteLine();
+            PrintKeyValue("Title", title);
+            PrintKeyValue("Description", metaDescription.Length > 50 ? metaDescription.Substring(0, 47) + "..." : metaDescription);
+            Console.WriteLine();
+            
+            PrintKeyValue("Images", images.Count.ToString());
+            PrintKeyValue("Links", links.Count.ToString());
+            PrintKeyValue("Scripts", scripts.Count.ToString());
+            PrintKeyValue("Stylesheets", styles.Count.ToString());
+            Console.WriteLine();
+            
+            PrintKeyValue("H1 Headers", h1Count.ToString());
+            PrintKeyValue("H2 Headers", h2Count.ToString());
+            PrintKeyValue("H3 Headers", h3Count.ToString());
+            Console.WriteLine();
+            
+            PrintKeyValue("Forms", formCount.ToString());
+            PrintKeyValue("Buttons", buttonCount.ToString());
+            PrintKeyValue("Input Fields", inputCount.ToString());
+            Console.WriteLine();
 
             var baseUri = new Uri(url);
             var internalLinks = links.Count(l => {
@@ -327,14 +390,18 @@ public class URLTool
             });
             
             var externalLinks = links.Count - internalLinks;
-            Console.WriteLine($"Internal Links: {internalLinks}");
-            Console.WriteLine($"External Links: {externalLinks}");
+            PrintKeyValue("Internal Links", internalLinks.ToString());
+            PrintKeyValue("External Links", externalLinks.ToString());
+            Console.WriteLine();
             
-            Console.WriteLine($"HTML Size: {html.Length:N0} bytes");
+            PrintKeyValue("HTML Size", $"{html.Length:N0} bytes");
+            Console.WriteLine();
+            
+            DrawBottomLine(60);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error analyzing content: {ex.Message}");
+            PrintColoredLine($"Error analyzing content: {ex.Message}", errorColor);
         }
     }
     
@@ -346,8 +413,10 @@ public class URLTool
     {
         try
         {
-            Console.WriteLine($"\nTracking response time for {url}");
-            Console.WriteLine($"Running {numTests} tests...\n");
+            PrintHeader("Response Time Tracking");
+            
+            PrintColoredLine($"Tracking response time for {url}", primaryColor);
+            PrintColoredLine($"Running {numTests} tests...\n", secondaryColor);
             
             var results = new List<long>();
             var stopwatch = new Stopwatch();
@@ -359,31 +428,287 @@ public class URLTool
                 client.DefaultRequestHeaders.Add("Cache-Control", "no-cache, no-store");
                 client.DefaultRequestHeaders.Add("Pragma", "no-cache");
                 
+                PrintProgress($"Running test {i+1}/{numTests}", i * 100 / numTests);
+                
                 stopwatch.Restart();
-                
                 var response = await client.GetAsync(url);
-                
                 stopwatch.Stop();
+                
                 var responseTime = stopwatch.ElapsedMilliseconds;
                 results.Add(responseTime);
                 
-                Console.WriteLine($"Test {i+1}: Response time: {responseTime}ms (Status: {(int)response.StatusCode} {response.StatusCode})");
+                Console.ForegroundColor = responseTime < 500 ? successColor : 
+                                         responseTime < 1000 ? secondaryColor : errorColor;
+                Console.Write($"Test {i+1}: Response time: {responseTime}ms ");
+                Console.ResetColor();
+                Console.WriteLine($"(Status: {(int)response.StatusCode} {response.StatusCode})");
                 
                 await Task.Delay(1000);
             }
+            
+            PrintProgress($"Running test {numTests}/{numTests}", 100);
             
             var avg = results.Average();
             var min = results.Min();
             var max = results.Max();
             
-            Console.WriteLine("\n==== Results ====");
-            Console.WriteLine($"Average response time: {avg:F1}ms");
-            Console.WriteLine($"Minimum response time: {min}ms");
-            Console.WriteLine($"Maximum response time: {max}ms");
+            DrawBox("Response Time Results", 60);
+            Console.WriteLine();
+            
+            PrintKeyValue("Average response time", $"{avg:F1}ms");
+            PrintKeyValue("Minimum response time", $"{min}ms");
+            PrintKeyValue("Maximum response time", $"{max}ms");
+            Console.WriteLine();
+            
+            string rating;
+            ConsoleColor ratingColor;
+            
+            if (avg < 300)
+            {
+                rating = "Excellent";
+                ratingColor = successColor;
+            }
+            else if (avg < 800)
+            {
+                rating = "Good";
+                ratingColor = ConsoleColor.DarkGreen;
+            }
+            else if (avg < 1500)
+            {
+                rating = "Average";
+                ratingColor = secondaryColor;
+            }
+            else if (avg < 3000)
+            {
+                rating = "Below Average";
+                ratingColor = ConsoleColor.DarkYellow;
+            }
+            else
+            {
+                rating = "Poor";
+                ratingColor = errorColor;
+            }
+            
+            Console.Write("Performance Rating: ");
+            Console.ForegroundColor = ratingColor;
+            Console.WriteLine(rating);
+            Console.ResetColor();
+            Console.WriteLine();
+            
+            DrawBottomLine(60);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error tracking response time: {ex.Message}");
+            PrintColoredLine($"Error tracking response time: {ex.Message}", errorColor);
+        }
+    }
+    
+    #endregion
+
+    #region Track Website Changes
+    
+    public static async Task TrackWebsiteChangesAsync(string url, int checkIntervalMinutes)
+    {
+        try
+        {
+            PrintHeader("Website Change Detector");
+            
+            PrintColoredLine($"Monitoring changes for: {url}", primaryColor);
+            PrintColoredLine($"Check interval: Every {checkIntervalMinutes} minute(s)", secondaryColor);
+            PrintColoredLine("Press Ctrl+C to stop monitoring\n", highlightColor);
+            
+            string changeDir = Path.Combine(Directory.GetCurrentDirectory(), "change_detection");
+            Directory.CreateDirectory(changeDir);
+            
+            var siteHash = new Uri(url).Host.Replace(".", "_");
+            string hashFilePath = Path.Combine(changeDir, $"{siteHash}_hashes.txt");
+            
+            Dictionary<string, string> previousHashes = new Dictionary<string, string>();
+            
+            if (File.Exists(hashFilePath))
+            {
+                var lines = File.ReadAllLines(hashFilePath);
+                foreach (var line in lines)
+                {
+                    var parts = line.Split('=');
+                    if (parts.Length == 2)
+                    {
+                        previousHashes[parts[0]] = parts[1];
+                    }
+                }
+                PrintColoredLine("Loaded previous snapshot for comparison", secondaryColor);
+            }
+            else
+            {
+                PrintColoredLine("No previous snapshot found - creating baseline", secondaryColor);
+            }
+            
+            DrawBox("Change Detection Log", 70);
+            
+            while (true)
+            {
+                try
+                {
+                    PrintColoredLine($"[{DateTime.Now}] Checking for changes...", primaryColor);
+                    
+                    client.DefaultRequestHeaders.Clear();
+                    client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+                    client.DefaultRequestHeaders.Add("Cache-Control", "no-cache, no-store");
+                    client.DefaultRequestHeaders.Add("Pragma", "no-cache");
+                    
+                    var response = await client.GetAsync(url);
+                    var html = await response.Content.ReadAsStringAsync();
+                    
+                    var doc = new HtmlDocument();
+                    doc.LoadHtml(html);
+                    
+                    Dictionary<string, string> currentHashes = new Dictionary<string, string>();
+                    Dictionary<string, string> changedElements = new Dictionary<string, string>();
+                    
+                    currentHashes["FullPage"] = GetSha256Hash(html);
+                    
+                    var headContent = doc.DocumentNode.SelectSingleNode("//head")?.InnerHtml ?? "";
+                    currentHashes["Head"] = GetSha256Hash(headContent);
+                    
+                    var bodyContent = doc.DocumentNode.SelectSingleNode("//body")?.InnerHtml ?? "";
+                    currentHashes["Body"] = GetSha256Hash(bodyContent);
+                    
+                    var title = doc.DocumentNode.SelectSingleNode("//title")?.InnerText ?? "";
+                    currentHashes["Title"] = GetSha256Hash(title);
+                    
+                    var mainContent = doc.DocumentNode.SelectSingleNode("//main")?.InnerHtml ?? "";
+                    currentHashes["MainContent"] = GetSha256Hash(mainContent);
+                    
+                    var headerContent = doc.DocumentNode.SelectSingleNode("//header")?.InnerHtml ?? "";
+                    currentHashes["Header"] = GetSha256Hash(headerContent);
+                    
+                    var footerContent = doc.DocumentNode.SelectSingleNode("//footer")?.InnerHtml ?? "";
+                    currentHashes["Footer"] = GetSha256Hash(footerContent);
+                    
+                    var styleContent = string.Join("\n", doc.DocumentNode.Descendants("style").Select(n => n.InnerHtml));
+                    currentHashes["Styles"] = GetSha256Hash(styleContent);
+                    
+                    var scriptContent = string.Join("\n", doc.DocumentNode.Descendants("script").Select(n => n.InnerHtml));
+                    currentHashes["Scripts"] = GetSha256Hash(scriptContent);
+                    
+                    var imageRefs = string.Join("\n", doc.DocumentNode.Descendants("img").Select(n => n.GetAttributeValue("src", "")));
+                    currentHashes["Images"] = GetSha256Hash(imageRefs);
+                    
+                    var metaTags = string.Join("\n", doc.DocumentNode.Descendants("meta").Select(n => n.OuterHtml));
+                    currentHashes["MetaTags"] = GetSha256Hash(metaTags);
+                    
+                    var linkTags = string.Join("\n", doc.DocumentNode.Descendants("link").Select(n => n.OuterHtml));
+                    currentHashes["LinkTags"] = GetSha256Hash(linkTags);
+                    
+                    bool hasChanges = false;
+                    if (previousHashes.Count > 0)
+                    {
+                        foreach (var kvp in currentHashes)
+                        {
+                            if (previousHashes.TryGetValue(kvp.Key, out string previousHash))
+                            {
+                                if (previousHash != kvp.Value)
+                                {
+                                    changedElements[kvp.Key] = kvp.Value;
+                                    hasChanges = true;
+                                }
+                            }
+                            else
+                            {
+                                changedElements[kvp.Key] = kvp.Value;
+                                hasChanges = true;
+                            }
+                        }
+                    }
+                    
+                    if (previousHashes.Count == 0)
+                    {
+                        PrintColoredLine($"[{DateTime.Now}] Created baseline snapshot", successColor);
+                        previousHashes = new Dictionary<string, string>(currentHashes);
+                        
+                        var hashLines = currentHashes.Select(kvp => $"{kvp.Key}={kvp.Value}").ToArray();
+                        File.WriteAllLines(hashFilePath, hashLines);
+                    }
+
+                    else if (hasChanges)
+                    {
+                        PrintColoredLine($"[{DateTime.Now}] Changes detected!", highlightColor);
+                        
+                        string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                        string changeReport = Path.Combine(changeDir, $"{siteHash}_changes_{timestamp}.txt");
+                        
+                        using (StreamWriter writer = new StreamWriter(changeReport))
+                        {
+                            writer.WriteLine($"Changes detected on {url} at {DateTime.Now}");
+                            writer.WriteLine("--------------------------------------------------");
+                            
+                            foreach (var change in changedElements)
+                            {
+                                writer.WriteLine($"Element modified: {change.Key}");
+                                PrintColoredLine($"  - Modified: {change.Key}", errorColor);
+                            }
+                            
+                            writer.WriteLine("\nChanges detected in the following elements:");
+                            writer.WriteLine("--------------------------------------------------");
+                            
+                            if (changedElements.ContainsKey("Title"))
+                            {
+                                writer.WriteLine($"Title: {title}");
+                            }
+                            
+                            if (changedElements.ContainsKey("FullPage"))
+                            {
+                                writer.WriteLine("Full page content changed");
+                                
+                                string htmlSnapshot = Path.Combine(changeDir, $"{siteHash}_snapshot_{timestamp}.html");
+                                File.WriteAllText(htmlSnapshot, html);
+                                
+                                writer.WriteLine($"Full HTML snapshot saved to: {htmlSnapshot}");
+                                PrintColoredLine($"  - HTML snapshot saved to: {Path.GetFileName(htmlSnapshot)}", secondaryColor);
+                            }
+                        }
+                        
+                        PrintColoredLine($"  - Change report saved to: {Path.GetFileName(changeReport)}", secondaryColor);
+                        
+                        previousHashes = new Dictionary<string, string>(currentHashes);
+                        
+                        var hashLines = currentHashes.Select(kvp => $"{kvp.Key}={kvp.Value}").ToArray();
+                        File.WriteAllLines(hashFilePath, hashLines);
+                    }
+                    else
+                    {
+                        PrintColoredLine($"[{DateTime.Now}] No changes detected", successColor);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    PrintColoredLine($"Error checking for changes: {ex.Message}", errorColor);
+                }
+                
+                Console.WriteLine(new string('-', 70));
+                await Task.Delay(TimeSpan.FromMinutes(checkIntervalMinutes));
+            }
+        }
+        catch (Exception ex)
+        {
+            PrintColoredLine($"Error in change detection: {ex.Message}", errorColor);
+        }
+    }
+    
+    private static string GetSha256Hash(string input)
+    {
+        if (string.IsNullOrEmpty(input)) return "EMPTY";
+        
+        using (SHA256 sha256Hash = SHA256.Create())
+        {
+            byte[] bytes = sha256Hash.ComputeHash(Encoding.UTF8.GetBytes(input));
+            
+            StringBuilder builder = new StringBuilder();
+            for (int i = 0; i < bytes.Length; i++)
+            {
+                builder.Append(bytes[i].ToString("x2"));
+            }
+            return builder.ToString();
         }
     }
     
@@ -395,8 +720,10 @@ public class URLTool
     {
         try
         {
-            Console.WriteLine($"\nGenerating embed code for: {url}");
-            Console.WriteLine("Fetching metadata...");
+            PrintHeader("Embed Code Generator");
+            
+            PrintColoredLine($"Generating embed code for: {url}", primaryColor);
+            PrintColoredLine("Fetching metadata...", secondaryColor);
 
             client.DefaultRequestHeaders.Clear();
             client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0");
@@ -524,13 +851,81 @@ public class URLTool
     </html>";
 
             File.WriteAllText("embed_example.html", examplePage);
-            Console.WriteLine($"Example page saved to: {Path.GetFullPath("embed_example.html")}");
-            Console.WriteLine("\nYou can open the example file in your browser to see how the embed looks.");
+            PrintColoredLine($"Example page saved to: {Path.GetFullPath("embed_example.html")}", successColor);
+            PrintColoredLine("\nYou can open the example file in your browser to see how the embed looks.", secondaryColor);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error generating embed code: {ex.Message}");
+            PrintColoredLine($"Error generating embed code: {ex.Message}", errorColor);
         }
+    }
+    
+    #endregion
+
+    #region UI Helpers
+    
+    private static void PrintHeader(string title)
+    {
+        Console.Clear();
+        
+        int width = Math.Max(60, title.Length + 10);
+        string padding = new string('═', width);
+        
+        Console.WriteLine();
+        Console.ForegroundColor = primaryColor;
+        Console.WriteLine($"╔{padding}╗");
+        Console.WriteLine($"║{title.PadLeft(title.Length + (width - title.Length) / 2).PadRight(width)}║");
+        Console.WriteLine($"╚{padding}╝");
+        Console.ResetColor();
+        Console.WriteLine();
+    }
+    
+    private static void PrintColoredLine(string text, ConsoleColor color)
+    {
+        Console.ForegroundColor = color;
+        Console.WriteLine(text);
+        Console.ResetColor();
+    }
+    
+    private static void PrintProgress(string text, int percentage)
+    {
+        int width = 30;
+        int filledWidth = (int)Math.Floor(width * percentage / 100.0);
+        
+        Console.Write($"\r{text}: [");
+        
+        Console.ForegroundColor = primaryColor;
+        Console.Write(new string('█', filledWidth));
+        Console.ResetColor();
+        
+        Console.Write(new string('░', width - filledWidth));
+        Console.Write($"] {percentage}%");
+        
+        if (percentage == 100)
+            Console.WriteLine();
+    }
+    
+    private static void PrintKeyValue(string key, string value)
+    {
+        Console.Write($"{key}: ");
+        Console.ForegroundColor = secondaryColor;
+        Console.WriteLine(value);
+        Console.ResetColor();
+    }
+    
+    private static void DrawBox(string title, int width)
+    {
+        Console.WriteLine(new string('─', width));
+        Console.Write("┌─ ");
+        Console.ForegroundColor = highlightColor;
+        Console.Write(title);
+        Console.ResetColor();
+        Console.WriteLine($" {new string('─', width - title.Length - 4)}┐");
+    }
+    
+    private static void DrawBottomLine(int width)
+    {
+        Console.WriteLine($"└{new string('─', width - 1)}┘");
     }
     
     #endregion
@@ -544,7 +939,7 @@ public class URLTool
             Console.Clear();
             DisplayBanner();
             
-            Console.WriteLine("Enter the URL to scrape or monitor (e.g., https://example.com):");
+            Console.WriteLine("Enter the URL to analyze (e.g., https://example.com):");
             string url = Console.ReadLine()?.Trim() ?? "";
 
             if (Uri.TryCreate(url, UriKind.Absolute, out Uri validatedUrl) && 
@@ -554,9 +949,9 @@ public class URLTool
                 {
                     DisplayMenu(url);
                     
-                    if (!int.TryParse(Console.ReadLine(), out int action) || action < 1 || action > 6)
+                    if (!int.TryParse(Console.ReadLine(), out int action) || action < 1 || action > 7)
                     {
-                        Console.WriteLine("Invalid option. Please enter a number between 1 and 6.");
+                        Console.WriteLine("Invalid option. Please enter a number between 1 and 7.");
                         continue;
                     }
 
@@ -584,6 +979,15 @@ public class URLTool
                             await GenerateEmbedCodeAsync(url);
                             break;
                         case 6:
+                            Console.Write("Enter the check interval in minutes (e.g., 5): ");
+                            if (!int.TryParse(Console.ReadLine(), out int changeInterval) || changeInterval < 1)
+                            {
+                                Console.WriteLine("Invalid interval. Using default of 5 minutes.");
+                                changeInterval = 5;
+                            }
+                            await TrackWebsiteChangesAsync(url, changeInterval);
+                            break;
+                        case 7:
                             Console.WriteLine("Exiting program. Goodbye!");
                             return;
                     }
@@ -613,26 +1017,44 @@ public class URLTool
 
     private static void DisplayBanner()
     {
+        Console.ForegroundColor = primaryColor;
         Console.WriteLine(@"
-╭───────────────────────────────────────╮
-│               URL TOOL                │
-│     A simple website utility tool     │
-╰───────────────────────────────────────╯");
+╭───────────────────────────────────────────────────────╮
+│                      URL TOOL                         │
+│         A comprehensive website utility tool          │
+╰───────────────────────────────────────────────────────╯");
+        Console.ResetColor();
     }
 
     private static void DisplayMenu(string url)
     {
-        Console.WriteLine("\n╭───────────────────────────────────────╮");
-        Console.WriteLine("│             MAIN MENU                 │");
-        Console.WriteLine("╰───────────────────────────────────────╯");
-        Console.WriteLine("1) Scrape Website (Download HTML, CSS, JS, images)");
-        Console.WriteLine("2) Monitor Website (Check every few minutes)");
-        Console.WriteLine("3) Analyze Content (Count images, links, scripts)");
-        Console.WriteLine("4) Track Response Time");
-        Console.WriteLine("5) Generate Embed Code (Like Discord embeds)");
-        Console.WriteLine("6) Exit");
-        Console.Write("\nEnter your choice (1-6): ");
+        Console.ForegroundColor = highlightColor;
+        Console.WriteLine("\n╭───────────────────────────────────────────────────────╮");
+        Console.WriteLine("│                     MAIN MENU                         │");
+        Console.WriteLine("╰───────────────────────────────────────────────────────╯");
+        Console.ResetColor();
+        
+        Console.WriteLine($"Current URL: {url}\n");
+        
+        PrintMenuOption(1, "Scrape Website", "Download HTML, CSS, JS, images");
+        PrintMenuOption(2, "Monitor Website Status", "Check website uptime");
+        PrintMenuOption(3, "Analyze Content", "Count images, links, scripts");
+        PrintMenuOption(4, "Track Response Time", "Measure website performance");
+        PrintMenuOption(5, "Generate Embed Code", "Create social media-style embeds");
+        PrintMenuOption(6, "Track Website Changes", "Monitor for content changes");
+        PrintMenuOption(7, "Exit", "Quit the application");
+        
+        Console.Write("\nEnter your choice (1-7): ");
+    }
+    
+    private static void PrintMenuOption(int number, string title, string description)
+    {
+        Console.Write($"{number}) ");
+        Console.ForegroundColor = secondaryColor;
+        Console.Write($"{title}");
+        Console.ResetColor();
+        Console.WriteLine($" - {description}");
     }
     
     #endregion
-}
+}         
