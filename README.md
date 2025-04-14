@@ -8,7 +8,7 @@ A super simple URL tool
 - 🔍 Site Analyzing: Analyze the site.  
 - ⏱️ Response Time: Track site response time.  
 - 📎 Embed Copier: Copy embeds (to use in Discord, for example).  
-- 🧼 Clean Layout: Automatically present site content in a cleaner format.  
+- 🧼 Clean Layout: now in a cleaner format.  
 - 🔁 Change Detection: Detect and log changes made to websites.
 
 ---
