@@ -1,6 +1,7 @@
 # **URL TOOL**
 
 A super simple URL tool
+(taking suggestions via discord!)
 ---
 ## 🚀 Features  
 - 📂 Scraper: Copy frontend files.  
