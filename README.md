@@ -21,3 +21,7 @@ A super simple URL tool
 5. done!
 
 # NOTE **THE PROGAM.CS IN THE NEW FOLDER MUST BE THE SAME AS THE OTHER PROGRAM.CS**
+
+---
+
+DM me on discord (daimyh) if you have any issues
