@@ -1,5 +1,3 @@
-// daimyh on dc for support/help
-
 using System;
 using System.IO;
 using System.Net.Http;
@@ -930,6 +928,600 @@ public class URLTool
     
     #endregion
 
+    #region Speed Optimizer Analysis
+
+    public static async Task AnalyzeWebsitePerformanceAsync(string url)
+    {
+        try
+        {
+            PrintHeader("Speed Optimizer Analysis");
+            
+            PrintColoredLine($"Analyzing performance for: {url}", primaryColor);
+            PrintColoredLine("This will identify performance bottlenecks and suggest optimizations.", secondaryColor);
+            
+            string perfDir = Path.Combine(Directory.GetCurrentDirectory(), "performance_analysis");
+            Directory.CreateDirectory(perfDir);
+            
+            PrintProgress("Performing initial request", 0);
+            
+            var stopwatch = new Stopwatch();
+            client.DefaultRequestHeaders.Clear();
+            client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            
+            stopwatch.Start();
+            var response = await client.GetAsync(url);
+            var firstByteTime = stopwatch.ElapsedMilliseconds;
+            
+            var html = await response.Content.ReadAsStringAsync();
+            var totalLoadTime = stopwatch.ElapsedMilliseconds;
+            stopwatch.Stop();
+            
+            PrintProgress("Performing initial request", 100);
+            
+            PrintProgress("Analyzing resources", 0);
+            var doc = new HtmlDocument();
+            doc.LoadHtml(html);
+            
+            var cssFiles = doc.DocumentNode.Descendants("link")
+                .Where(n => n.GetAttributeValue("rel", "").ToLower() == "stylesheet")
+                .Select(n => n.GetAttributeValue("href", ""))
+                .Where(url => !string.IsNullOrWhiteSpace(url))
+                .Distinct()
+                .ToList();
+            
+            var jsFiles = doc.DocumentNode.Descendants("script")
+                .Select(n => n.GetAttributeValue("src", ""))
+                .Where(url => !string.IsNullOrWhiteSpace(url))
+                .Distinct()
+                .ToList();
+            
+            var images = doc.DocumentNode.Descendants("img")
+                .Select(n => new { 
+                    Src = n.GetAttributeValue("src", ""),
+                    Width = n.GetAttributeValue("width", ""),
+                    Height = n.GetAttributeValue("height", ""),
+                    Loading = n.GetAttributeValue("loading", "")
+                })
+                .Where(img => !string.IsNullOrWhiteSpace(img.Src))
+                .ToList();
+            
+            PrintProgress("Analyzing resources", 50);
+            
+            var renderBlockingCss = doc.DocumentNode.Descendants("link")
+                .Where(n => n.GetAttributeValue("rel", "").ToLower() == "stylesheet" && 
+                    !n.GetAttributeValue("media", "").Contains("print") &&
+                    string.IsNullOrEmpty(n.GetAttributeValue("async", "")) &&
+                    string.IsNullOrEmpty(n.GetAttributeValue("defer", "")))
+                .Select(n => n.GetAttributeValue("href", ""))
+                .Where(url => !string.IsNullOrWhiteSpace(url))
+                .Distinct()
+                .ToList();
+            
+            var renderBlockingJs = doc.DocumentNode.Descendants("script")
+                .Where(n => !string.IsNullOrEmpty(n.GetAttributeValue("src", "")) && 
+                    string.IsNullOrEmpty(n.GetAttributeValue("async", "")) && 
+                    string.IsNullOrEmpty(n.GetAttributeValue("defer", "")))
+                .Select(n => n.GetAttributeValue("src", ""))
+                .Distinct()
+                .ToList();
+            
+            var waterfall = new List<ResourceLoadInfo>();
+            
+            waterfall.Add(new ResourceLoadInfo
+            {
+                ResourceType = "HTML",
+                Url = url,
+                Size = html.Length,
+                StartTime = 0,
+                EndTime = totalLoadTime,
+                TimingType = "Document"
+            });
+            
+            Dictionary<string, long> resourceSizes = new Dictionary<string, long>();
+            Dictionary<string, long> resourceLoadTimes = new Dictionary<string, long>();
+            List<ImageAnalysisResult> imageAnalysisResults = new List<ImageAnalysisResult>();
+            
+            int totalResources = cssFiles.Count + jsFiles.Count + images.Count;
+            int processedResources = 0;
+            
+            foreach (var cssUrl in cssFiles)
+            {
+                try
+                {
+                    var resolvedUrl = ResolveUrl(url, cssUrl);
+                    var (size, loadTime) = await MeasureResourceAsync(resolvedUrl);
+                    
+                    resourceSizes[resolvedUrl] = size;
+                    resourceLoadTimes[resolvedUrl] = loadTime;
+                    
+                    waterfall.Add(new ResourceLoadInfo
+                    {
+                        ResourceType = "CSS",
+                        Url = resolvedUrl,
+                        Size = size,
+                        StartTime = waterfall[0].EndTime + (processedResources * 10), 
+                        EndTime = waterfall[0].EndTime + loadTime + (processedResources * 10),
+                        TimingType = renderBlockingCss.Contains(cssUrl) ? "Render Blocking" : "Async"
+                    });
+                    
+                    processedResources++;
+                    PrintProgress("Analyzing resources", 50 + (processedResources * 50 / totalResources));
+                }
+                catch (Exception ex)
+                {
+                    PrintColoredLine($"Error analyzing CSS resource {cssUrl}: {ex.Message}", errorColor);
+                }
+            }
+            
+            foreach (var jsUrl in jsFiles)
+            {
+                try
+                {
+                    var resolvedUrl = ResolveUrl(url, jsUrl);
+                    var (size, loadTime) = await MeasureResourceAsync(resolvedUrl);
+                    
+                    resourceSizes[resolvedUrl] = size;
+                    resourceLoadTimes[resolvedUrl] = loadTime;
+                    
+                    waterfall.Add(new ResourceLoadInfo
+                    {
+                        ResourceType = "JavaScript",
+                        Url = resolvedUrl,
+                        Size = size,
+                        StartTime = waterfall[0].EndTime + (processedResources * 10), 
+                        EndTime = waterfall[0].EndTime + loadTime + (processedResources * 10),
+                        TimingType = renderBlockingJs.Contains(jsUrl) ? "Render Blocking" : "Async"
+                    });
+                    
+                    processedResources++;
+                    PrintProgress("Analyzing resources", 50 + (processedResources * 50 / totalResources));
+                }
+                catch (Exception ex)
+                {
+                    PrintColoredLine($"Error analyzing JS resource {jsUrl}: {ex.Message}", errorColor);
+                }
+            }
+            
+            foreach (var img in images)
+            {
+                try
+                {
+                    var resolvedUrl = ResolveUrl(url, img.Src);
+                    var (size, loadTime) = await MeasureResourceAsync(resolvedUrl);
+                    
+                    resourceSizes[resolvedUrl] = size;
+                    resourceLoadTimes[resolvedUrl] = loadTime;
+                    
+                    string extension = Path.GetExtension(resolvedUrl).ToLowerInvariant();
+                    string format = extension.TrimStart('.');
+                    if (string.IsNullOrEmpty(format) || format == "jpg") format = "jpeg";
+                    
+                    var imageResult = new ImageAnalysisResult
+                    {
+                        Url = resolvedUrl,
+                        Size = size,
+                        Format = format,
+                        Width = img.Width,
+                        Height = img.Height,
+                        IsLazyLoaded = img.Loading.ToLower() == "lazy"
+                    };
+                    
+                    imageAnalysisResults.Add(imageResult);
+                    
+                    waterfall.Add(new ResourceLoadInfo
+                    {
+                        ResourceType = "Image",
+                        Url = resolvedUrl,
+                        Size = size,
+                        StartTime = waterfall[0].EndTime + (processedResources * 10), 
+                        EndTime = waterfall[0].EndTime + loadTime + (processedResources * 10),
+                        TimingType = img.Loading.ToLower() == "lazy" ? "Lazy" : "Eager"
+                    });
+                    
+                    processedResources++;
+                    PrintProgress("Analyzing resources", 50 + (processedResources * 50 / totalResources));
+                }
+                catch (Exception ex)
+                {
+                    PrintColoredLine($"Error analyzing image resource {img.Src}: {ex.Message}", errorColor);
+                }
+            }
+            
+            waterfall = waterfall.OrderBy(r => r.StartTime).ToList();
+            
+            long totalPageSize = waterfall.Sum(r => r.Size);
+            
+            long estimatedLoadTime = waterfall.Max(r => r.EndTime);
+            
+            DrawBox("Performance Analysis Results", 80);
+            Console.WriteLine();
+            
+            PrintColoredLine("Basic Performance Metrics:", highlightColor);
+            PrintKeyValue("Time to First Byte", $"{firstByteTime}ms");
+            PrintKeyValue("Total HTML Load Time", $"{totalLoadTime}ms");
+            PrintKeyValue("Estimated Full Page Load Time", $"{estimatedLoadTime}ms");
+            PrintKeyValue("Total Page Size", $"{FormatFileSize(totalPageSize)}");
+            PrintKeyValue("Number of Requests", $"{waterfall.Count}");
+            Console.WriteLine();
+            
+            string performanceRating;
+            ConsoleColor ratingColor;
+            
+            if (totalLoadTime < 1000 && estimatedLoadTime < 2000)
+            {
+                performanceRating = "Excellent";
+                ratingColor = successColor;
+            }
+            else if (totalLoadTime < 2000 && estimatedLoadTime < 4000)
+            {
+                performanceRating = "Good";
+                ratingColor = ConsoleColor.DarkGreen;
+            }
+            else if (totalLoadTime < 3000 && estimatedLoadTime < 6000)
+            {
+                performanceRating = "Average";
+                ratingColor = secondaryColor;
+            }
+            else if (totalLoadTime < 5000 && estimatedLoadTime < 10000)
+            {
+                performanceRating = "Below Average";
+                ratingColor = ConsoleColor.DarkYellow;
+            }
+            else
+            {
+                performanceRating = "Poor";
+                ratingColor = errorColor;
+            }
+            
+            Console.Write("Overall Performance Rating: ");
+            Console.ForegroundColor = ratingColor;
+            Console.WriteLine(performanceRating);
+            Console.ResetColor();
+            Console.WriteLine();
+            
+            PrintColoredLine("Performance Issues Summary:", highlightColor);
+            List<string> issues = new List<string>();
+            
+            if (renderBlockingCss.Count > 0) 
+                issues.Add($"Found {renderBlockingCss.Count} render-blocking CSS resources");
+            
+            if (renderBlockingJs.Count > 0)
+                issues.Add($"Found {renderBlockingJs.Count} render-blocking JavaScript resources");
+            
+            var largeImages = imageAnalysisResults.Where(i => i.Size > 200 * 1024).ToList(); // > 200KB
+            if (largeImages.Count > 0)
+                issues.Add($"Found {largeImages.Count} oversized images that could be optimized");
+            
+            var nonWebPImages = imageAnalysisResults
+                .Where(i => i.Format != "webp" && i.Format != "avif" && i.Format != "svg")
+                .ToList();
+            if (nonWebPImages.Count > 0)
+                issues.Add($"Found {nonWebPImages.Count} images not using modern formats (WebP/AVIF)");
+            
+            var nonLazyImages = imageAnalysisResults.Where(i => !i.IsLazyLoaded).ToList();
+            if (nonLazyImages.Count > 0)
+                issues.Add($"Found {nonLazyImages.Count} images without lazy loading");
+            
+            if (totalPageSize > 3 * 1024 * 1024) // > 3MB
+                issues.Add($"Total page size ({FormatFileSize(totalPageSize)}) exceeds recommended limit");
+            
+            if (waterfall.Count > 50)
+                issues.Add($"High number of requests ({waterfall.Count}) may impact performance");
+            
+            if (issues.Count == 0)
+                PrintColoredLine("  No major performance issues detected!", successColor);
+            else
+                foreach (var issue in issues)
+                    PrintColoredLine($"  • {issue}", errorColor);
+            
+            Console.WriteLine();
+            
+            PrintColoredLine("Optimization Recommendations:", highlightColor);
+            
+            if (renderBlockingCss.Count > 0)
+            {
+                PrintColoredLine("  1. Optimize CSS Delivery:", secondaryColor);
+                Console.WriteLine("     • Consider inlining critical CSS");
+                Console.WriteLine("     • Add 'media' attributes where applicable");
+                Console.WriteLine("     • Use 'preload' for important stylesheets");
+                Console.WriteLine();
+            }
+            
+            if (renderBlockingJs.Count > 0)
+            {
+                PrintColoredLine("  2. Optimize JavaScript Loading:", secondaryColor);
+                Console.WriteLine("     • Add 'async' or 'defer' attributes to non-critical scripts");
+                Console.WriteLine("     • Move scripts to the bottom of the page");
+                Console.WriteLine("     • Consider code splitting for large JavaScript bundles");
+                Console.WriteLine();
+            }
+            
+            if (largeImages.Count > 0 || nonWebPImages.Count > 0)
+            {
+                PrintColoredLine("  3. Optimize Images:", secondaryColor);
+                if (largeImages.Count > 0)
+                {
+                    Console.WriteLine("     • Compress the following large images:");
+                    foreach (var largeImage in largeImages.Take(3))
+                    {
+                        Console.WriteLine($"       - {Path.GetFileName(largeImage.Url)} ({FormatFileSize(largeImage.Size)})");
+                    }
+                    if (largeImages.Count > 3) Console.WriteLine($"       - Plus {largeImages.Count - 3} more images");
+                }
+                
+                if (nonWebPImages.Count > 0)
+                {
+                    Console.WriteLine("     • Convert images to WebP or AVIF format for better compression");
+                }
+                Console.WriteLine();
+            }
+            
+            if (nonLazyImages.Count > 0)
+            {
+                PrintColoredLine("  4. Implement Lazy Loading:", secondaryColor);
+                Console.WriteLine("     • Add loading=\"lazy\" attribute to below-the-fold images");
+                Console.WriteLine("     • Consider using Intersection Observer for custom lazy loading");
+                Console.WriteLine();
+            }
+            
+            PrintColoredLine("Resource Loading Waterfall Chart:", highlightColor);
+            DrawWaterfallChart(waterfall);
+            Console.WriteLine();
+            
+            string reportPath = Path.Combine(perfDir, $"performance_report_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+            using (StreamWriter writer = new StreamWriter(reportPath))
+            {
+                writer.WriteLine($"Performance Analysis Report for {url}");
+                writer.WriteLine($"Generated on {DateTime.Now}\n");
+                
+                writer.WriteLine("Basic Performance Metrics:");
+                writer.WriteLine($"Time to First Byte: {firstByteTime}ms");
+                writer.WriteLine($"Total HTML Load Time: {totalLoadTime}ms");
+                writer.WriteLine($"Estimated Full Page Load Time: {estimatedLoadTime}ms");
+                writer.WriteLine($"Total Page Size: {FormatFileSize(totalPageSize)}");
+                writer.WriteLine($"Number of Requests: {waterfall.Count}");
+                writer.WriteLine($"Performance Rating: {performanceRating}\n");
+                
+                writer.WriteLine("Performance Issues:");
+                if (issues.Count == 0)
+                    writer.WriteLine("  No major performance issues detected!");
+                else
+                    foreach (var issue in issues)
+                        writer.WriteLine($"  • {issue}");
+                
+                writer.WriteLine("\nDetailed Resource Analysis:");
+                
+                writer.WriteLine("\nCSS Files:");
+                foreach (var cssUrl in cssFiles)
+                {
+                    var resolvedUrl = ResolveUrl(url, cssUrl);
+                    if (resourceSizes.ContainsKey(resolvedUrl))
+                    {
+                        writer.WriteLine($"  • {resolvedUrl}");
+                        writer.WriteLine($"    Size: {FormatFileSize(resourceSizes[resolvedUrl])}");
+                        writer.WriteLine($"    Load Time: {resourceLoadTimes[resolvedUrl]}ms");
+                        writer.WriteLine($"    Render Blocking: {renderBlockingCss.Contains(cssUrl)}");
+                    }
+                }
+                
+                writer.WriteLine("\nJavaScript Files:");
+                foreach (var jsUrl in jsFiles)
+                {
+                    var resolvedUrl = ResolveUrl(url, jsUrl);
+                    if (resourceSizes.ContainsKey(resolvedUrl))
+                    {
+                        writer.WriteLine($"  • {resolvedUrl}");
+                        writer.WriteLine($"    Size: {FormatFileSize(resourceSizes[resolvedUrl])}");
+                        writer.WriteLine($"    Load Time: {resourceLoadTimes[resolvedUrl]}ms");
+                        writer.WriteLine($"    Render Blocking: {renderBlockingJs.Contains(jsUrl)}");
+                    }
+                }
+                
+                writer.WriteLine("\nImages:");
+                foreach (var imgResult in imageAnalysisResults)
+                {
+                    writer.WriteLine($"  • {imgResult.Url}");
+                    writer.WriteLine($"    Size: {FormatFileSize(imgResult.Size)}");
+                    writer.WriteLine($"    Format: {imgResult.Format}");
+                    if (!string.IsNullOrEmpty(imgResult.Width) && !string.IsNullOrEmpty(imgResult.Height))
+                    {
+                        writer.WriteLine($"    Dimensions: {imgResult.Width}x{imgResult.Height}");
+                    }
+                    writer.WriteLine($"    Lazy Loaded: {imgResult.IsLazyLoaded}");
+                    
+                    string recommendation = "";
+                    if (imgResult.Size > 200 * 1024)
+                    {
+                        recommendation += "Compress image. ";
+                    }
+                    if (imgResult.Format != "webp" && imgResult.Format != "avif" && imgResult.Format != "svg")
+                    {
+                        recommendation += "Convert to WebP/AVIF. ";
+                    }
+                    if (!imgResult.IsLazyLoaded)
+                    {
+                        recommendation += "Implement lazy loading.";
+                    }
+                    
+                    if (!string.IsNullOrEmpty(recommendation))
+                    {
+                        writer.WriteLine($"    Recommendation: {recommendation}");
+                    }
+                }
+            }
+            
+            PrintColoredLine($"\nPerformance analysis report saved to: {reportPath}", successColor);
+        }
+        catch (Exception ex)
+        {
+            PrintColoredLine($"Error analyzing website performance: {ex.Message}", errorColor);
+            if (ex.InnerException != null)
+            {
+                PrintColoredLine($"Inner Exception: {ex.InnerException.Message}", errorColor);
+            }
+        }
+    }
+
+    private static async Task<(long Size, long LoadTime)> MeasureResourceAsync(string url)
+    {
+        try
+        {
+            var stopwatch = new Stopwatch();
+            stopwatch.Start();
+            
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            
+            var response = await client.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                return (0, 0);
+            }
+            
+            var content = await response.Content.ReadAsByteArrayAsync();
+            stopwatch.Stop();
+            
+            return (content.Length, stopwatch.ElapsedMilliseconds);
+        }
+        catch
+        {
+            return (0, 0);
+        }
+    }
+
+    private static string ResolveUrl(string baseUrl, string relativeUrl)
+    {
+        if (Uri.TryCreate(relativeUrl, UriKind.Absolute, out _))
+        {
+            return relativeUrl;
+        }
+        
+        if (relativeUrl.StartsWith("//"))
+        {
+            var baseUri = new Uri(baseUrl);
+            return $"{baseUri.Scheme}:{relativeUrl}";
+        }
+        
+        var baseUri2 = new Uri(baseUrl);
+        return new Uri(baseUri2, relativeUrl).AbsoluteUri;
+    }
+
+    private static string FormatFileSize(long bytes)
+    {
+        string[] sizes = { "B", "KB", "MB", "GB" };
+        int order = 0;
+        double size = bytes;
+        
+        while (size >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            size = size / 1024;
+        }
+        
+        return $"{size:0.##} {sizes[order]}";
+    }
+
+    private static void DrawWaterfallChart(List<ResourceLoadInfo> resources)
+    {
+        int chartWidth = 60;
+        long maxEndTime = resources.Max(r => r.EndTime);
+        
+        Console.WriteLine();
+        Console.WriteLine(new string('-', chartWidth + 40));
+        
+        foreach (var resource in resources)
+        {
+            string resourceName = resource.ResourceType;
+            string resourceUrl = Path.GetFileName(resource.Url);
+            if (string.IsNullOrEmpty(resourceUrl)) resourceUrl = new Uri(resource.Url).Host;
+            
+            resourceName = $"{resourceName}: {resourceUrl}";
+            if (resourceName.Length > 30)
+            {
+                resourceName = resourceName.Substring(0, 27) + "...";
+            }
+            
+            Console.Write(resourceName.PadRight(30) + " | ");
+            
+            int startPos = (int)((resource.StartTime * chartWidth) / maxEndTime);
+            int endPos = (int)((resource.EndTime * chartWidth) / maxEndTime);
+            int length = Math.Max(1, endPos - startPos);
+            
+            ConsoleColor barColor;
+            switch (resource.ResourceType)
+            {
+                case "HTML":
+                    barColor = ConsoleColor.DarkCyan;
+                    break;
+                case "CSS":
+                    barColor = ConsoleColor.Blue;
+                    break;
+                case "JavaScript":
+                    barColor = ConsoleColor.Yellow;
+                    break;
+                case "Image":
+                    barColor = ConsoleColor.Green;
+                    break;
+                default:
+                    barColor = ConsoleColor.Gray;
+                    break;
+            }
+            
+            if (resource.TimingType == "Render Blocking")
+            {
+                barColor = ConsoleColor.Red;
+            }
+            
+            Console.Write(new string(' ', startPos));
+            
+            Console.ForegroundColor = barColor;
+            Console.Write(new string('█', length));
+            Console.ResetColor();
+            
+            Console.WriteLine($" {resource.EndTime}ms");
+        }
+        
+        Console.WriteLine(new string('-', chartWidth + 40));
+        Console.WriteLine();
+        
+        Console.Write("Legend: ");
+        
+        Console.ForegroundColor = ConsoleColor.DarkCyan;
+        Console.Write("■ HTML  ");
+        Console.ForegroundColor = ConsoleColor.Blue;
+        Console.Write("■ CSS  ");
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.Write("■ JavaScript  ");
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.Write("■ Image  ");
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.Write("■ Render Blocking");
+        Console.ResetColor();
+        Console.WriteLine();
+    }
+
+    private class ResourceLoadInfo
+    {
+        public string ResourceType { get; set; }
+        public string Url { get; set; }
+        public long Size { get; set; }
+        public long StartTime { get; set; }
+        public long EndTime { get; set; }
+        public string TimingType { get; set; }
+    }
+
+    private class ImageAnalysisResult
+    {
+        public string Url { get; set; }
+        public long Size { get; set; }
+        public string Format { get; set; }
+        public string Width { get; set; }
+        public string Height { get; set; }
+        public bool IsLazyLoaded { get; set; }
+    }
+
+    #endregion
+
     #region Main Program
     
     public static async Task Main(string[] args)
@@ -949,9 +1541,9 @@ public class URLTool
                 {
                     DisplayMenu(url);
                     
-                    if (!int.TryParse(Console.ReadLine(), out int action) || action < 1 || action > 7)
+                    if (!int.TryParse(Console.ReadLine(), out int action) || action < 1 || action > 8)
                     {
-                        Console.WriteLine("Invalid option. Please enter a number between 1 and 7.");
+                        Console.WriteLine("Invalid option. Please enter a number between 1 and 8.");
                         continue;
                     }
 
@@ -988,8 +1580,14 @@ public class URLTool
                             await TrackWebsiteChangesAsync(url, changeInterval);
                             break;
                         case 7:
+                            await AnalyzeWebsitePerformanceAsync(url);
+                            break;
+                        case 8:
                             Console.WriteLine("Exiting program. Goodbye!");
                             return;
+                        default:
+                            Console.WriteLine("Invalid option. Please try again.");
+                            break;
                     }
                     
                     Console.WriteLine("\nPress any key to return to menu...");
@@ -1042,9 +1640,10 @@ public class URLTool
         PrintMenuOption(4, "Track Response Time", "Measure website performance");
         PrintMenuOption(5, "Generate Embed Code", "Create social media-style embeds");
         PrintMenuOption(6, "Track Website Changes", "Monitor for content changes");
-        PrintMenuOption(7, "Exit", "Quit the application");
+        PrintMenuOption(7, "Speed Optimizer Analysis", "Identify performance issues and suggest fixes");
+        PrintMenuOption(8, "Exit", "Quit the application");
         
-        Console.Write("\nEnter your choice (1-7): ");
+        Console.Write("\nEnter your choice (1-8): ");
     }
     
     private static void PrintMenuOption(int number, string title, string description)
