@@ -928,6 +928,108 @@ public class URLTool
     
     #endregion
 
+    public static async Task CheckBrokenLinksAsync(string url)
+    {
+        PrintHeader("Broken Link Checker");
+
+        var brokenLinks = new List<string>();
+        try
+        {
+            var html = await client.GetStringAsync(url);
+            var doc = new HtmlDocument();
+            doc.LoadHtml(html);
+            var links = doc.DocumentNode.Descendants("a")
+                .Select(n => n.GetAttributeValue("href", ""))
+                .Where(href => !string.IsNullOrWhiteSpace(href) && (href.StartsWith("http") || href.StartsWith("/")))
+                .Distinct();
+
+            int checkedCount = 0;
+            foreach (var link in links)
+            {
+                string fullUrl = link.StartsWith("http") ? link : new Uri(new Uri(url), link).ToString();
+
+                try
+                {
+                    var res = await client.GetAsync(fullUrl);
+                    if (!res.IsSuccessStatusCode)
+                    {
+                        brokenLinks.Add($"{fullUrl} ({(int)res.StatusCode})");
+                    }
+                }
+                catch
+                {
+                    brokenLinks.Add($"{fullUrl} (unreachable)");
+                }
+
+                checkedCount++;
+                PrintProgress("Checking links", (checkedCount * 100) / links.Count());
+            }
+
+            Console.WriteLine();
+            if (brokenLinks.Count == 0)
+            {
+                PrintColoredLine("No broken links found!", successColor);
+            }
+            else
+            {
+                PrintColoredLine($"\nFound {brokenLinks.Count} broken links:", errorColor);
+                foreach (var broken in brokenLinks)
+                {
+                    Console.WriteLine($" - {broken}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            PrintColoredLine($"Error checking links: {ex.Message}", errorColor);
+        }
+    }
+
+    public static async Task DetectApiEndpointsAsync(string url)
+    {
+        PrintHeader("API Endpoint Detector");
+
+        try
+        {
+            var html = await client.GetStringAsync(url);
+            var doc = new HtmlDocument();
+            doc.LoadHtml(html);
+
+            var scriptContents = doc.DocumentNode.Descendants("script")
+                .Select(s => s.InnerHtml)
+                .Where(code => !string.IsNullOrWhiteSpace(code));
+
+            var endpoints = new HashSet<string>();
+
+            foreach (var script in scriptContents)
+            {
+                foreach (Match match in Regex.Matches(script, @"https?:\/\/[^\s""']+"))
+                {
+                    var link = match.Value;
+                    if (link.Contains("/api/") || link.Contains(".php") || link.Contains(".json"))
+                    {
+                        endpoints.Add(link);
+                    }
+                }
+            }
+
+            Console.WriteLine($"\nDetected {endpoints.Count} API endpoints:");
+            foreach (var ep in endpoints)
+            {
+                PrintColoredLine($" - {ep}", highlightColor);
+            }
+
+            if (endpoints.Count == 0)
+            {
+                PrintColoredLine("No obvious API endpoints found.", secondaryColor);
+            }
+        }
+        catch (Exception ex)
+        {
+            PrintColoredLine($"Error detecting endpoints: {ex.Message}", errorColor);
+        }
+    }
+
     #region Speed Optimizer Analysis
 
     public static async Task AnalyzeWebsitePerformanceAsync(string url)
@@ -1541,9 +1643,9 @@ public class URLTool
                 {
                     DisplayMenu(url);
                     
-                    if (!int.TryParse(Console.ReadLine(), out int action) || action < 1 || action > 8)
+                    if (!int.TryParse(Console.ReadLine(), out int action) || action < 1 || action > 11)
                     {
-                        Console.WriteLine("Invalid option. Please enter a number between 1 and 8.");
+                        Console.WriteLine("Invalid option. Please enter a number between 1 and 11.");
                         continue;
                     }
 
@@ -1583,7 +1685,30 @@ public class URLTool
                             await AnalyzeWebsitePerformanceAsync(url);
                             break;
                         case 8:
-                            Console.WriteLine("Exiting program. Goodbye!");
+                            await CheckBrokenLinksAsync(url);
+                            break;
+                        case 9:
+                            await DetectApiEndpointsAsync(url);
+                            break;
+                        case 10:
+                            Console.Write("Enter new URL: ");
+                            string newUrl = Console.ReadLine()?.Trim() ?? "";
+
+                            if (Uri.TryCreate(newUrl, UriKind.Absolute, out Uri newValidated) &&
+                                (newValidated.Scheme == Uri.UriSchemeHttp || newValidated.Scheme == Uri.UriSchemeHttps))
+                            {
+                                url = newUrl;
+                                Console.Clear();
+                                DisplayBanner();
+                                PrintColoredLine($"New URL set: {url}", primaryColor);
+                            }
+                            else
+                            {
+                                PrintColoredLine("Invalid URL. Staying on current URL.", errorColor);
+                            }
+                            break;
+                        case 11:
+                            Console.WriteLine("Exiting the program. Goodbye!");
                             return;
                         default:
                             Console.WriteLine("Invalid option. Please try again.");
@@ -1641,9 +1766,14 @@ public class URLTool
         PrintMenuOption(5, "Generate Embed Code", "Create social media-style embeds");
         PrintMenuOption(6, "Track Website Changes", "Monitor for content changes");
         PrintMenuOption(7, "Speed Optimizer Analysis", "Identify performance issues and suggest fixes");
-        PrintMenuOption(8, "Exit", "Quit the application");
+        PrintMenuOption(8, "Check Broken Links", "Find dead or unreachable links");
+        PrintMenuOption(9, "Detect API Endpoints", "Look for XHR/fetch/REST URLs");
+        PrintMenuOption(10, "Choose New URL", "Reset the current URL");
+        PrintMenuOption(11, "Exit", "Quit the application");
+
+
         
-        Console.Write("\nEnter your choice (1-8): ");
+        Console.Write("\nEnter your choice (1-10): ");
     }
     
     private static void PrintMenuOption(int number, string title, string description)
