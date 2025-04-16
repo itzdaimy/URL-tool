@@ -11,6 +11,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Security.Cryptography;
 using System.Threading;
+using System.Collections.Concurrent;
 
 public class URLTool
 {
@@ -27,6 +28,7 @@ public class URLTool
     private static ConsoleColor successColor = ConsoleColor.Green;
     private static ConsoleColor errorColor = ConsoleColor.Red;
     private static ConsoleColor highlightColor = ConsoleColor.Magenta;
+    private static ConsoleColor warningColor = ConsoleColor.Yellow;
 
     #region Website Scraping
     
@@ -887,21 +889,28 @@ public class URLTool
     
     private static void PrintProgress(string text, int percentage)
     {
-        int width = 30;
+        int width = 30;  
         int filledWidth = (int)Math.Floor(width * percentage / 100.0);
-        
+
         Console.Write($"\r{text}: [");
-        
-        Console.ForegroundColor = primaryColor;
-        Console.Write(new string('█', filledWidth));
-        Console.ResetColor();
-        
-        Console.Write(new string('░', width - filledWidth));
+
+        if (percentage <= 20)
+            Console.ForegroundColor = ConsoleColor.Red; 
+        else if (percentage <= 60)
+            Console.ForegroundColor = ConsoleColor.Yellow; 
+        else
+            Console.ForegroundColor = ConsoleColor.Green; 
+
+        Console.Write(new string('█', filledWidth)); 
+        Console.ResetColor(); 
+
+        Console.Write(new string('░', width - filledWidth)); 
         Console.Write($"] {percentage}%");
-        
+
         if (percentage == 100)
-            Console.WriteLine();
+            Console.WriteLine(); 
     }
+
     
     private static void PrintKeyValue(string key, string value)
     {
@@ -927,6 +936,8 @@ public class URLTool
     }
     
     #endregion
+
+    #region broken link checker
 
     public static async Task CheckBrokenLinksAsync(string url)
     {
@@ -985,50 +996,299 @@ public class URLTool
         }
     }
 
+    #endregion
+
+    #region API Endpoint Detector
+
     public static async Task DetectApiEndpointsAsync(string url)
     {
-        PrintHeader("API Endpoint Detector");
+        PrintHeader("Smart API Endpoint Detector");
 
         try
         {
-            var html = await client.GetStringAsync(url);
-            var doc = new HtmlDocument();
-            doc.LoadHtml(html);
+            PrintColoredLine("Starting deep scan for API endpoints...", primaryColor);
+            PrintColoredLine("This may take a while...", primaryColor);
+            PrintProgress("Initializing", 0);
 
-            var scriptContents = doc.DocumentNode.Descendants("script")
-                .Select(s => s.InnerHtml)
-                .Where(code => !string.IsNullOrWhiteSpace(code));
+            var baseUri = new Uri(url);
+            var root = baseUri.GetLeftPart(UriPartial.Authority);
+            var host = baseUri.Host;
+            var scheme = baseUri.Scheme;
 
-            var endpoints = new HashSet<string>();
+            var endpoints = new ConcurrentBag<string>(); 
+            var checkedUrls = new ConcurrentDictionary<string, bool>(); 
+            var html = await FetchHtmlAsync(url);
+            var scriptContents = ParseScriptsForUrls(html);
 
-            foreach (var script in scriptContents)
+            var commonPaths = GetCommonPaths();
+            var altSubdomains = GetAltSubdomains();
+            var baseUrls = BuildSubdomainUrls(root, scheme, host, altSubdomains);
+
+            int totalChecks = baseUrls.Count * commonPaths.Length;
+            int currentCheck = 0;
+
+            object progressLock = new object();
+
+            await Parallel.ForEachAsync(baseUrls, async (baseUrl, _) =>
             {
-                foreach (Match match in Regex.Matches(script, @"https?:\/\/[^\s""']+"))
+                var batchCount = 0;
+
+                foreach (var path in commonPaths)
                 {
-                    var link = match.Value;
-                    if (link.Contains("/api/") || link.Contains(".php") || link.Contains(".json"))
+                    var fullUrl = baseUrl.TrimEnd('/') + path;
+
+                    if (checkedUrls.ContainsKey(fullUrl)) continue;
+
+                    checkedUrls[fullUrl] = true; 
+                    await TryFetchEndpointAsync(fullUrl, endpoints);
+
+                    batchCount++;
+                    currentCheck++;
+                    if (batchCount % 10 == 0 || currentCheck == totalChecks) 
                     {
-                        endpoints.Add(link);
+                        lock (progressLock)
+                        {
+                            PrintProgress("Scanning common paths", 45 + (int)((double)currentCheck / totalChecks * 50));
+                        }
                     }
                 }
-            }
+            });
 
-            Console.WriteLine($"\nDetected {endpoints.Count} API endpoints:");
-            foreach (var ep in endpoints)
+            PrintProgress("Scan complete", 100);
+            Console.WriteLine();    
+
+            DrawBox("API Endpoint Results", 60);
+            Console.WriteLine();
+
+            if (endpoints.Any())
             {
-                PrintColoredLine($" - {ep}", highlightColor);
+                PrintKeyValue("Total Endpoints Found", endpoints.Count.ToString());
+                Console.WriteLine();
+                foreach (var ep in endpoints)
+                {
+                    PrintColoredLine($" - {ep}", highlightColor);
+                }
             }
-
-            if (endpoints.Count == 0)
+            else
             {
                 PrintColoredLine("No obvious API endpoints found.", secondaryColor);
             }
+
+            Console.WriteLine();
+            PrintKeyValue("Scanned URLs", checkedUrls.Count.ToString());
+            PrintKeyValue("Script-based Detections", scriptContents.Count().ToString());
+            PrintKeyValue("HTML Size", $"{html.Length:N0} bytes");
+            DrawBottomLine(60);
         }
         catch (Exception ex)
         {
             PrintColoredLine($"Error detecting endpoints: {ex.Message}", errorColor);
         }
     }
+
+    private static async Task<string> FetchHtmlAsync(string url)
+    {
+        PrintProgress("Fetching HTML", 10);
+
+        try
+        {
+            client.DefaultRequestHeaders.Clear();
+            client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0");
+            return await client.GetStringAsync(url);
+        }
+        catch (HttpRequestException ex)
+        {
+            if (!ex.Message.Contains("403"))
+                PrintColoredLine($"Non-403 error while getting HTML: {ex.Message}", warningColor);
+            return string.Empty;
+        }
+    }
+
+    private static IEnumerable<string> ParseScriptsForUrls(string html)
+    {
+        PrintProgress("Parsing HTML", 25);
+        var doc = new HtmlDocument();
+        doc.LoadHtml(html);
+
+        return doc.DocumentNode?.Descendants("script")
+            ?.Select(s => s.InnerHtml)
+            ?.Where(code => !string.IsNullOrWhiteSpace(code)) ?? Enumerable.Empty<string>();
+    }
+
+    private static string[] GetCommonPaths()
+    {
+        return new[]
+        {
+            "/api", "/api/v1", "/api/v2", "/api/v3", "/api/v4", "/api/v5", "/api/v6", "/api/v7",
+            "/api/v1/users", "/api/v1/login", "/api/v1/register", "/api/v1/auth", "/api/v1/me",
+            "/api/v2/users", "/api/v2/login", "/api/v2/register", "/api/v2/auth", "/api/v2/me",
+            "/api/users", "/api/user", "/api/auth", "/api/login", "/api/logout", "/api/register",
+            "/api/status", "/api/data", "/api/info", "/api/me", "/api/profile", "/api/config",
+            "/api/posts", "/api/comments", "/api/messages", "/api/settings", "/api/notifications",
+            "/api/files", "/api/uploads", "/api/download", "/api/images", "/api/docs", "/api/search",
+            "/api/reset", "/api/verify", "/api/resend", "/api/refresh", "/api/token", "/api/health",
+            "/api/admin", "/api/moderator", "/api/dashboard", "/api/metrics", "/api/usage",
+            "/data.json", "/config.json", "/endpoints.json", "/swagger.json", "/openapi.json",
+            "/manifest.json", "/sitemap.json", "/env.json", "/debug.json", "/settings.json",
+            "/rest", "/rest/v1", "/rest/v2", "/rest/api", "/rest/data", "/rest/status",
+            "/index.php?route=api", "/index.php/api", "/api.php", "/endpoint.php",
+            "/graphql", "/graphiql", "/graphql/playground", "/gql", "/query", "/mutate",
+            "/json", "/ajax", "/feed", "/rss", "/atom", "/export", "/import", "/token",
+            "/access_token", "/session", "/sessions", "/key", "/keys", "/version", "/v", "/v1",
+            "/docs", "/documentation", "/apidocs", "/swagger", "/insomnia", "/postman",
+            "/public/api", "/private/api", "/internal/api", "/external/api", "/partners/api",
+            "/backend/api", "/mobile/api", "/web/api", "/client/api", "/service/api",
+            "/api/internal", "/api/external", "/api/public", "/api/private", "/api/dev",
+            "/api/test", "/api/staging", "/api/prod", "/api/production", "/api/beta", "/users",
+            
+            "/api/v1/users/{userId}/posts", "/api/v1/users/{userId}/comments", "/api/v1/users/{userId}/messages",
+            "/api/v1/users/{userId}/notifications", "/api/v1/users/{userId}/settings", "/api/v1/users/{userId}/profile",
+            "/api/v1/users/{userId}/files", "/api/v1/users/{userId}/uploads", "/api/v1/users/{userId}/download",
+            "/api/v1/users/{userId}/docs", "/api/v1/users/{userId}/search", "/api/v1/users/{userId}/verify",
+            "/api/v1/users/{userId}/reset", "/api/v1/users/{userId}/token", "/api/v1/users/{userId}/health",
+            
+            "/api/v2/posts/{postId}/comments", "/api/v2/posts/{postId}/likes", "/api/v2/posts/{postId}/shares",
+            "/api/v2/posts/{postId}/report", "/api/v2/posts/{postId}/views", "/api/v2/posts/{postId}/save",
+            "/api/v2/posts/{postId}/edit", "/api/v2/posts/{postId}/delete", "/api/v2/posts/{postId}/media",
+            
+            "/api/v3/comments/{commentId}/reply", "/api/v3/comments/{commentId}/edit", "/api/v3/comments/{commentId}/delete",
+            "/api/v3/messages/{messageId}/mark-read", "/api/v3/messages/{messageId}/delete",
+            "/api/v3/notifications/{notificationId}/mark-read", "/api/v3/notifications/{notificationId}/delete",
+            "/api/v3/settings/{userId}/update", "/api/v3/settings/{userId}/reset",
+            
+            "/api/v4/posts/{postId}/comments/{commentId}/like", "/api/v4/posts/{postId}/comments/{commentId}/reply",
+            "/api/v4/posts/{postId}/comments/{commentId}/edit", "/api/v4/posts/{postId}/comments/{commentId}/delete",
+            
+            "/api/v5/images/{imageId}/edit", "/api/v5/images/{imageId}/delete", "/api/v5/files/{fileId}/download",
+            "/api/v5/files/{fileId}/delete", "/api/v5/uploads/{uploadId}/status", "/api/v5/uploads/{uploadId}/cancel",
+            
+            "/api/admin/users/{userId}/ban", "/api/admin/users/{userId}/unban", "/api/admin/users/{userId}/suspend",
+            "/api/admin/users/{userId}/unsuspend", "/api/admin/users/{userId}/delete", "/api/admin/users/{userId}/promote",
+            "/api/admin/users/{userId}/demote", "/api/admin/users/{userId}/moderate", "/api/admin/users/{userId}/kick",
+            
+            "/api/moderator/posts/{postId}/approve", "/api/moderator/posts/{postId}/reject", "/api/moderator/comments/{commentId}/approve",
+            "/api/moderator/comments/{commentId}/reject", "/api/moderator/users/{userId}/warn", "/api/moderator/users/{userId}/mute",
+            
+            "/api/public/feeds", "/api/public/categories", "/api/public/trending", "/api/public/recommended",
+            "/api/public/notifications", "/api/public/events", "/api/public/alerts", "/api/public/offers",
+            
+            "/api/external/oauth", "/api/external/github", "/api/external/google", "/api/external/facebook",
+            "/api/external/twitter", "/api/external/linkedin", "/api/external/discord", "/api/external/twitch",
+            
+            "/api/private/sessions/{sessionId}/end", "/api/private/sessions/{sessionId}/resume", "/api/private/sessions/{sessionId}/pause",
+            
+            "/api/dev/{devId}/logs", "/api/dev/{devId}/metrics", "/api/dev/{devId}/config", "/api/dev/{devId}/status",
+            "/api/dev/{devId}/update", "/api/dev/{devId}/revert", "/api/dev/{devId}/debug", "/api/dev/{devId}/monitor",
+            
+            "/api/test/{testId}/results", "/api/test/{testId}/start", "/api/test/{testId}/stop", "/api/test/{testId}/logs",
+            "/api/test/{testId}/feedback", "/api/test/{testId}/reset",
+            
+            "/api/staging/{stagingId}/deploy", "/api/staging/{stagingId}/rollback", "/api/staging/{stagingId}/status",
+            "/api/staging/{stagingId}/monitor", "/api/staging/{stagingId}/logs", "/api/staging/{stagingId}/metrics",
+            
+            "/api/prod/{prodId}/status", "/api/prod/{prodId}/maintenance", "/api/prod/{prodId}/deploy", "/api/prod/{prodId}/rollback",
+            "/api/prod/{prodId}/logs", "/api/prod/{prodId}/monitor", "/api/prod/{prodId}/metrics",
+            
+            "/api/production/{productionId}/deploy", "/api/production/{productionId}/rollback", "/api/production/{productionId}/status",
+            "/api/production/{productionId}/logs", "/api/production/{productionId}/monitor", "/api/production/{productionId}/metrics",
+            
+            "/api/beta/{betaId}/features", "/api/beta/{betaId}/opt-in", "/api/beta/{betaId}/opt-out", "/api/beta/{betaId}/feedback",
+            "/api/beta/{betaId}/status", "/api/beta/{betaId}/logs", "/api/beta/{betaId}/metrics",
+
+            "/api/users/{userId}/following", "/api/users/{userId}/followers", "/api/users/{userId}/posts/favorites",
+            "/api/users/{userId}/posts/saves", "/api/users/{userId}/mentions", "/api/users/{userId}/checkins",
+            "/api/users/{userId}/locations", "/api/users/{userId}/photos", "/api/users/{userId}/audio",
+            "/api/users/{userId}/videos", "/api/users/{userId}/live", "/api/users/{userId}/subscriptions",
+            "/api/users/{userId}/tags", "/api/users/{userId}/social", "/api/users/{userId}/sharing",
+            
+            "/api/posts/{postId}/report/abuse", "/api/posts/{postId}/comment/reply", "/api/posts/{postId}/comment/edit",
+            "/api/posts/{postId}/comment/flag", "/api/posts/{postId}/like/undo", "/api/posts/{postId}/share/undo",
+            
+            "/api/comments/{commentId}/like", "/api/comments/{commentId}/report", "/api/comments/{commentId}/flag",
+            "/api/comments/{commentId}/save", "/api/comments/{commentId}/edit", "/api/comments/{commentId}/delete",
+            
+            "/api/messages/{messageId}/forward", "/api/messages/{messageId}/reply", "/api/messages/{messageId}/edit",
+            "/api/messages/{messageId}/delete", "/api/messages/{messageId}/flag", "/api/messages/{messageId}/mark-important",
+            
+            "/api/notifications/{notificationId}/mark-read", "/api/notifications/{notificationId}/dismiss",
+            "/api/notifications/{notificationId}/archive", "/api/notifications/{notificationId}/flag",
+            
+            "/api/notifications/{notificationId}/block", "/api/notifications/{notificationId}/unblock",
+            "/api/notifications/{notificationId}/mute", "/api/notifications/{notificationId}/unmute",
+            
+            "/api/settings/{userId}/notifications", "/api/settings/{userId}/privacy", "/api/settings/{userId}/general",
+            "/api/settings/{userId}/security", "/api/settings/{userId}/display", "/api/settings/{userId}/language",
+            
+            "/api/feeds/{feedId}/like", "/api/feeds/{feedId}/share", "/api/feeds/{feedId}/comment", "/api/feeds/{feedId}/follow",
+            "/api/feeds/{feedId}/unfollow", "/api/feeds/{feedId}/save", "/api/feeds/{feedId}/block", "/api/feeds/{feedId}/report",
+            
+            "/api/external/oauth2", "/api/external/facebook/login", "/api/external/google/login", "/api/external/github/login",
+            "/api/external/twitter/login", "/api/external/linkedin/login", "/api/external/discord/login",
+            
+            "/api/internal/maintenance", "/api/internal/metrics", "/api/internal/reports", "/api/internal/update",
+            "/api/internal/sync", "/api/internal/configure", "/api/internal/database",
+            
+            "/api/test/{testId}/logs/errors", "/api/test/{testId}/logs/actions", "/api/test/{testId}/feedback/response",
+            "/api/test/{testId}/feedback/suggestions", "/api/test/{testId}/feedback/issues",
+            
+            "/api/admin/users/{userId}/reset-password", "/api/admin/users/{userId}/enable-2fa", "/api/admin/users/{userId}/disable-2fa",
+            "/api/admin/users/{userId}/view-logs", "/api/admin/users/{userId}/view-reports", "/api/admin/users/{userId}/access-level",
+            
+            "/api/moderator/users/{userId}/mute", "/api/moderator/users/{userId}/unmute", "/api/moderator/users/{userId}/ban",
+            "/api/moderator/users/{userId}/warn", "/api/moderator/users/{userId}/kick", "/api/moderator/posts/{postId}/approve",
+            
+            "/api/staging/{stagingId}/rollback", "/api/staging/{stagingId}/monitor", "/api/staging/{stagingId}/status",
+            "/api/prod/{prodId}/deploy", "/api/prod/{prodId}/monitor", "/api/prod/{prodId}/maintenance", 
+            "/api/production/{productionId}/metrics"
+        };
+    }
+
+
+
+    private static string[] GetAltSubdomains()
+    {
+        return new[]
+        {
+            "api", "v1", "v2", "v3", "v4", "backend", "dev-api", "test-api", "staging-api", "prod-api",
+            "internal-api", "external-api", "mobile-api", "web-api", "admin-api", "client-api",
+            "beta-api", "gateway", "edge", "core", "services", "service", "auth", "login", "users",
+            "data", "api01", "api1", "api2", "api3", "api4", "api5", "dev1", "dev2", "stage", "prod",
+            "microservice", "function", "cloud", "backend1", "api-server", "api-node", "api-host",
+            "api-prod", "api-staging", "api-test", "api-dev", "api-int", "api-ext", "graphql",
+            "rest", "json", "gql", "services-api", "auth-api", "public-api", "secure-api",
+        };
+    }
+
+    private static HashSet<string> BuildSubdomainUrls(string root, string scheme, string host, string[] altSubdomains)
+    {
+        var baseUrls = new HashSet<string> { root };
+        foreach (var sub in altSubdomains)
+        {
+            baseUrls.Add($"{scheme}://{sub}.{host}");
+        }
+        return baseUrls;
+    }
+
+    private static async Task TryFetchEndpointAsync(string fullUrl, ConcurrentBag<string> endpoints)
+    {
+        try
+        {
+            var res = await client.GetAsync(fullUrl);
+            var contentType = res.Content.Headers.ContentType?.MediaType ?? "";
+
+            if ((int)res.StatusCode != 403 && res.IsSuccessStatusCode &&
+                (contentType.Contains("json") || contentType.Contains("text") || contentType.Contains("xml")))
+            {
+                endpoints.Add(fullUrl);
+            }
+        }
+        catch (Exception)
+        {
+            // Continue silently
+        }
+    }
+
+    #endregion
 
     #region Speed Optimizer Analysis
 
@@ -1773,7 +2033,7 @@ public class URLTool
 
 
         
-        Console.Write("\nEnter your choice (1-10): ");
+        Console.Write("\nEnter your choice (1-11): ");
     }
     
     private static void PrintMenuOption(int number, string title, string description)
