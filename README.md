@@ -16,7 +16,7 @@ A super simple URL tool
 - 🔍 API Endpoint Detector: Detect /api, .php, .json URLs used by the site.
 
 ---
-V1.1
+V1.3
 ---
 
 ## **💻 Build into exe**
