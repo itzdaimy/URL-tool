@@ -11,7 +11,9 @@ A super simple URL tool
 - 📎 Embed Copier: Copy embeds (to use in Discord, for example).  
 - 🧼 Clean Layout: Now in a cleaner format.  
 - 🔁 Change Detection: Detect and log changes made to websites.  
-- ⚡ Speed Optimizer: Analyze and suggest improvements for website speed.
+- ⚡ Speed Optimizer: Analyze and suggest improvements for website speed.  
+- 🔗 Broken Link Checker: Find and report dead or unreachable links.  
+- 🔍 API Endpoint Detector: Detect /api, .php, .json URLs used by the site.
 
 ---
 V1.1
