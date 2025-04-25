@@ -32,3 +32,4 @@ V1.3
 ---
 
 DM me on discord (daimyh) if you have any issues
+(rarely updated)
